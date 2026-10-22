@@ -1,0 +1,63 @@
+Code
+
+ #include <pic.h>
+
+#define LCD_ADDR 0x40
+#define BL 0x08
+#define EN 0x04
+#define RS 0x01
+
+void i2c_wait(void){ while((SSPCON2 & 0x1F) || (SSPSTAT & 0x04)); }
+void i2c_start(void){ i2c_wait(); SEN = 1; }
+void i2c_stop(void){ i2c_wait(); PEN = 1; }
+void i2c_write(unsigned char d){ i2c_wait(); SSPBUF = d; }
+
+void i2c_init(void){
+    TRISC3 = 1; TRISC4 = 1;
+    SSPCON = 0x28;          // I2C master mode
+    SSPCON2 = 0;
+    SSPSTAT = 0;
+    SSPADD = 49;            // 20MHz / (4*(49+1)) = 100 kHz
+}
+
+void pcf_write(unsigned char d){
+    i2c_start();
+    i2c_write(LCD_ADDR);
+    i2c_write(d);
+    i2c_stop();
+    i2c_wait();
+}
+
+void lcd_nibble(unsigned char n, unsigned char rs){   // n in upper 4 bits
+    pcf_write(n | rs | BL | EN);
+    pcf_write(n | rs | BL);                           // EN falling edge latches data
+}
+
+void lcd_send(unsigned char v, unsigned char rs){
+    lcd_nibble(v & 0xF0, rs);
+    lcd_nibble((v << 4) & 0xF0, rs);
+}
+
+void lcd_cmd(unsigned char c){ lcd_send(c, 0); }
+void lcd_char(unsigned char c){ lcd_send(c, RS); }
+void lcd_print(const char *s){ while(*s) lcd_char(*s++); }
+
+void lcd_init(void){
+    lcd_nibble(0x30, 0); 
+    lcd_nibble(0x30, 0); 
+    lcd_nibble(0x30, 0); 
+    lcd_nibble(0x20, 0);  // switch to 4-bit mode
+    lcd_cmd(0x28);   // 4-bit, 2 lines, 5x8 font
+    lcd_cmd(0x0C);   // display on, cursor off
+    lcd_cmd(0x06);   // auto increment
+    lcd_cmd(0x01);   // clear
+}
+
+void main(void){
+    i2c_init();
+    lcd_init();
+    lcd_cmd(0x80);              // line 1, column 0
+    lcd_print("hello from pic");
+    while(1);
+}
+
