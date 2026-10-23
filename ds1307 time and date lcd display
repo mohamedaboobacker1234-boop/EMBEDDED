@@ -1,1 +1,130 @@
+// PIC16F877A + DS1307 + 16x2 LCD (4-bit on PORTD) - HI-TECH C, manual delays
+// DS1307: SDA=RC4, SCL=RC3 (4.7k pull-ups to +5V)
+// LCD: RS=RD0, EN=RD1, D4-D7=RD4-RD7
+#include<pic.h>
+#define _XTAL_FREQ 20000000
+#define RS RD0
+#define EN RD1
 
+__CONFIG(HS & WDTDIS & PWRTEN & LVPDIS);
+
+// ---------- manual delays (approximate, tune if needed) ----------
+void delay_us(unsigned int us){
+    while(us--){ NOP(); }
+}
+void delay_ms(unsigned int ms){
+    unsigned int j;
+    while(ms--){
+        for(j = 0; j < 400; j++){ NOP(); }
+    }
+}
+
+// ---------- LCD ----------
+void lcd_nibble(unsigned char n){
+    PORTD = (PORTD & 0x0F) | (n & 0xF0);
+    EN = 1; delay_us(5); EN = 0; delay_us(50);
+}
+void lcd_cmd(unsigned char c){
+    RS = 0; lcd_nibble(c); lcd_nibble(c << 4);
+    if (c < 4) delay_ms(2);
+}
+void lcd_char(unsigned char d){
+    RS = 1; lcd_nibble(d); lcd_nibble(d << 4);
+}
+void lcd_str(const char *s){ while(*s) lcd_char(*s++); }
+void lcd_init(void){
+    TRISD = 0x00; PORTD = 0;
+    delay_ms(30);
+    RS = 0; lcd_nibble(0x30); delay_ms(5);
+    lcd_nibble(0x30); delay_ms(1);
+    lcd_nibble(0x30); lcd_nibble(0x20);
+    lcd_cmd(0x28); lcd_cmd(0x0C); lcd_cmd(0x06); lcd_cmd(0x01);
+}
+void lcd_2d(unsigned char bcd){          // print BCD as 2 digits
+    lcd_char((bcd >> 4) + '0');
+    lcd_char((bcd & 0x0F) + '0');
+}
+
+// ---------- I2C (flag based) ----------
+void i2c_init(void){
+    TRISC3 = 1; TRISC4 = 1;
+    SSPCON = 0x28;           // I2C master mode
+    SSPCON2 = 0x00;
+    SSPADD = 49;             // 100 kHz @ 20 MHz
+    SSPSTAT = 0;
+    SSPIF = 0;
+}
+void i2c_start(void){ SSPIF = 0; SEN = 1; while(SEN); }
+void i2c_stop(void){ PEN = 1; while(PEN); }
+void i2c_restart(void){ RSEN = 1; while(RSEN); }
+void i2c_write(unsigned char d){
+    SSPIF = 0;
+    SSPBUF = d;
+    while(!SSPIF);
+    SSPIF = 0;
+}
+unsigned char i2c_read(unsigned char ack){
+    unsigned char d;
+    RCEN = 1;
+    while(!BF);
+    d = SSPBUF;
+    ACKDT = ack;             // 0 = ACK, 1 = NACK
+    ACKEN = 1;
+    while(ACKEN);
+    return d;
+}
+
+// ---------- DS1307 ----------
+void rtc_set(unsigned char h, unsigned char m, unsigned char s,
+             unsigned char day, unsigned char mon, unsigned char yr){ // all BCD
+    i2c_start(); i2c_write(0xD0); i2c_write(0x00);
+    i2c_write(s & 0x7F);     // clears CH bit -> clock runs
+    i2c_write(m); i2c_write(h);
+    i2c_write(1);            // weekday (unused)
+    i2c_write(day); i2c_write(mon); i2c_write(yr);
+    i2c_stop();
+}
+void rtc_read(unsigned char *h, unsigned char *m, unsigned char *s,
+              unsigned char *d, unsigned char *mo, unsigned char *y){
+    i2c_start(); i2c_write(0xD0); i2c_write(0x00); i2c_restart(); i2c_write(0xD1);
+    *s = i2c_read(0) & 0x7F;
+    *m = i2c_read(0);
+    *h = i2c_read(0) & 0x3F;
+    i2c_read(0);             // weekday skipped
+    *d = i2c_read(0);
+    *mo = i2c_read(0);
+    *y = i2c_read(1);        // NACK on last byte
+    i2c_stop();
+}
+
+void main(void){
+    unsigned char h, m, s, d, mo, y, count = 0, show_date = 0;
+
+    ADCON1 = 0x06;           // PORTA/E digital
+    lcd_init();
+    i2c_init();
+
+    // Set once, then comment out this line and rebuild: 10:30:00, 22-10-26
+    rtc_set(0x10, 0x30, 0x00, 0x22, 0x10, 0x26);
+
+    while(1){
+        rtc_read(&h, &m, &s, &d, &mo, &y);
+
+        lcd_cmd(0x80);
+        if(!show_date){
+            lcd_str("TIME ");
+            lcd_2d(h); lcd_char(':'); lcd_2d(m); lcd_char(':'); lcd_2d(s);
+            lcd_str("   ");
+        } else {
+            lcd_str("DATE ");
+            lcd_2d(d); lcd_char('/'); lcd_2d(mo); lcd_str("/20"); lcd_2d(y);
+        }
+
+        delay_ms(500);
+        if(++count >= 10){   // switch every ~5 seconds
+            count = 0;
+            show_date ^= 1;
+            lcd_cmd(0x01);
+        }
+    }
+}
