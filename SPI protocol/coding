@@ -1,1 +1,57 @@
+#include <pic.h>
+#define MCP_CS  RD0
 
+#define MCP_WRITE 0x40
+#define IODIRA    0x00
+#define OLATA     0x14
+
+void delay_ms(unsigned int ms)
+{
+    unsigned int i, j;
+    for(i = 0; i < ms; i++)
+        for(j = 0; j < 200; j++);
+}
+
+void SPI_Init(void)
+{
+    TRISC3 = 0;  // SCK output
+    TRISC5 = 0;  // SDO output
+    TRISC4 = 1;  // SDI input
+
+    TRISD0 = 0;  // CS output
+    MCP_CS = 1;
+
+    SSPSTAT = 0x40;
+    SSPCON = 0x21;  // SPI Master, Fosc/16
+}
+
+void SPI_Write(unsigned char data)
+{
+    SSPBUF = data;
+    while(!BF);          // wait until transfer completes
+    data = SSPBUF;       // clear BF
+}
+
+void MCP_Write(unsigned char reg, unsigned char data)
+{
+    MCP_CS = 0;
+    SPI_Write(MCP_WRITE);
+    SPI_Write(reg);
+    SPI_Write(data);
+    MCP_CS = 1;
+}
+
+void main(void)
+{
+    SPI_Init();
+    MCP_Write(IODIRA, 0x00);
+
+    while(1)
+    {
+        MCP_Write(OLATA, 0xFF);
+        delay_ms(1000);
+
+        MCP_Write(OLATA, 0x00);
+        delay_ms(1000);
+    }
+}
